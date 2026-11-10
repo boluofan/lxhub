@@ -27,6 +27,9 @@ DEFAULTS = {
     "crawl_interval_hours": 24,
     # 复制链接时可拼接的加速前缀：[{"name":"","prefix":"https://gh1.lhl.one/","hosts":[...]}]
     "mirror_prefixes": [],
+    # 抓取用 GitHub 加速前缀（如 https://gh-proxy.com/，每行一个）：
+    # 抓 raw/gist/codeload 与 github.com 的 archive/release 附件时按行轮换拼接；空 = 直连
+    "fetch_mirrors": [],
 
     # 沙箱实测探测（可选实验特性）。enabled=False 时保持纯静态模式
     "probe": {
@@ -62,6 +65,7 @@ class Config:
     check_interval_hours: float
     crawl_interval_hours: float
     mirror_prefixes: list
+    fetch_mirrors: list
     probe: dict
 
 
@@ -187,6 +191,7 @@ EDITABLE = {
     "check_interval_hours": float,
     "crawl_interval_hours": float,
     "mirror_prefixes": list,
+    "fetch_mirrors": list,
     "probe.enabled": bool,
     "probe.interval_hours": float,
     "probe.deep": bool,

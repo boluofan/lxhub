@@ -17,7 +17,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import checker, discover
+from . import checker, discover, fetcher
 from .config import EDITABLE, cast_bool, load_config, override_path
 from .db import DB
 from .progress import Progress
@@ -485,6 +485,10 @@ async def admin_set(req: Request):
         raise HTTPException(400, "请求体不是合法 JSON")
     if not isinstance(partial, dict):
         raise HTTPException(400, "请求体必须是对象")
+    # 宽容形态：fetch_mirrors 允许 curl 直接传多行字符串（后台 lines 组件发的是数组）
+    if isinstance(partial.get("fetch_mirrors"), str):
+        partial = dict(partial)
+        partial["fetch_mirrors"] = [x.strip() for x in partial["fetch_mirrors"].splitlines()]
     applied = {}
     for k, cast in EDITABLE.items():
         if k not in partial:
@@ -506,6 +510,19 @@ async def admin_set(req: Request):
             applied["mirror_prefixes"] = [_norm_mirror(x) for x in applied["mirror_prefixes"]]
         except ValueError as e:
             raise HTTPException(400, f"字段 mirror_prefixes 无效: {e}")
+    if "fetch_mirrors" in applied:
+        # 校验为可拼接的 http(s) 前缀：gh-proxy.com 这类服务是 URL 前缀镜像而非 HTTP 代理
+        items = []
+        for x in applied["fetch_mirrors"]:
+            s = str(x).strip()
+            if not s:
+                continue
+            if not s.lower().startswith(("http://", "https://")):
+                raise HTTPException(400, f"fetch_mirrors 含不合法的加速前缀: {s}（应为 http(s):// 开头的镜像地址，如 https://gh-proxy.com/）")
+            if not s.endswith("/"):
+                s += "/"
+            items.append(s)
+        applied["fetch_mirrors"] = items
     if "probe.qualities" in applied:
         qs = [str(x).strip() for x in applied["probe.qualities"] if str(x).strip()]
         bad = [q for q in qs if q not in ("128k", "flac", "flac24bit")]
@@ -522,6 +539,9 @@ async def admin_set(req: Request):
     for k, v in applied.items():
         _set_value(k, v)
     _save_overrides(applied)
+    if "fetch_mirrors" in applied:
+        # 加速前缀热更新：下一轮任务/新请求生效（进行中的一轮沿用旧池）
+        fetcher.set_mirrors(applied["fetch_mirrors"])
     return {"ok": True, "applied": list(applied.keys())}
 
 

@@ -12,7 +12,7 @@ interface ConfigGroup {
 
 /**
  * 后台配置分组。字段与后端 `EDITABLE` 一一对应：
- * `github_token / keywords / seed_repos / seed_urls / mirror_prefixes /
+ * `github_token / keywords / seed_repos / seed_urls / mirror_prefixes / fetch_mirrors /
  * max_repos_per_keyword / max_repos_total / max_files_per_repo / max_file_bytes /
  * request_timeout / concurrency / check_interval_hours / crawl_interval_hours`
  */
@@ -45,6 +45,12 @@ const GROUPS: Record<string, ConfigGroup> = {
       { key: 'max_file_bytes', label: '单文件体积上限（字节）', type: 'number' },
       { key: 'concurrency', label: '并发数', type: 'number' },
       { key: 'request_timeout', label: '请求超时（秒）', type: 'float' },
+      {
+        key: 'fetch_mirrors',
+        label: 'GitHub 加速前缀（每行一个）',
+        type: 'lines',
+        tip: '留空直连。填 gh-proxy.com 这类前缀镜像（如 https://gh-proxy.com/）。镜像请求失败会自动回退直连，保存后即时生效（进行中的一轮沿用旧配置）',
+      },
     ],
   },
   schedule: {

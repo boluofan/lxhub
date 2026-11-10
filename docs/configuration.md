@@ -18,6 +18,7 @@
 | `seed_urls` | 已知的音源脚本直链，每次爬取都会检测 |
 | `check_interval_hours` / `crawl_interval_hours` | 复检 / 全量爬取周期 |
 | `mirror_prefixes` | 复制时可选的加速前缀，见 [加速前缀](mirror-prefix.md) |
+| `fetch_mirrors` | **抓取用 GitHub 加速前缀**（每行一个，如 `https://gh-proxy.com/`）。这类服务是 URL 前缀镜像而非 HTTP 代理：抓取 raw / gist / codeload 与 release 附件、archive 压缩包时把整条 GitHub 链接拼在镜像域名后，按行轮换分摊；GitHub API 搜索不走前缀。镜像请求网络失败会自动回退原 URL 直连重试一次。后台「配置管理 → 爬取设置」保存即生效（进行中的一轮沿用旧值） |
 | `probe.*` | 沙箱实测（默认关闭）。**推荐在后台「配置管理 → 沙箱实测」一键开启并设置定时任务**，保存即生效；字段说明见 [沙箱实测](probe.md) |
 | `max_repos_total` / `max_repos_per_keyword` / `max_files_per_repo` | 单次爬取的仓库总数 / 每个关键词取几个仓库 / 每仓库候选文件数上限 |
 
