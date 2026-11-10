@@ -1,5 +1,9 @@
 services:
   lxhub:
+    # 本地改了 Python/前端代码想生效：保留 build: .，然后 docker compose up -d --build 从本地 Dockerfile 构建
+    # （此时 image: 只是给本地构建产物打的 tag，不再自动拉取远端 latest）
+    # 想恢复「直接拉原作者最新镜像」：删除下面这行 build: . 即可
+    build: .
     image: ghcr.io/deerwan/lxhub:latest
     container_name: lxhub
     ports:
