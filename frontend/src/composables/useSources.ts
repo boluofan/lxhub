@@ -29,6 +29,7 @@ const SORT_GET: Record<string, (s: Source) => string | number> = {
   auth: (s) => (s.author || '').toLowerCase(),
   upd: (s) => s.repo_pushed_at || s.content_updated_at || s.first_seen || '',
   probe: (s) => PROBE_RANK[probeKey(s)],
+  confidence: (s) => s.confidence || 0,
 }
 
 /** 音源列表：加载、筛选、排序，前台与后台「音源管理」共用 */
@@ -56,10 +57,14 @@ export function useSources() {
     const dir = sort.value.dir
     const t = (s: Source) => s.repo_pushed_at || s.content_updated_at || s.first_seen || ''
     if (!k) {
+      // 与后端 list_sources() 的 ORDER BY 对齐：存活/有效是硬门槛，之后
+      // 实测置信度高的整体靠前，再比静态分级 / 实测状态 / 更新时间。
       return [...list].sort(
         (a, b) =>
           Number(a.api_alive === 'down') - Number(b.api_alive === 'down') ||
           Number(!!b.is_alive) - Number(!!a.is_alive) ||
+          Number(!!b.looks_valid) - Number(!!a.looks_valid) ||
+          Number(b.confidence || 0) - Number(a.confidence || 0) ||
           Number(b.valid_tier === 'confirmed') - Number(a.valid_tier === 'confirmed') ||
           PROBE_RANK[probeKey(a)] - PROBE_RANK[probeKey(b)] ||
           (t(b) < t(a) ? -1 : t(b) > t(a) ? 1 : 0),

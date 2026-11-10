@@ -6,6 +6,8 @@ import sqlite3
 import threading
 from pathlib import Path
 
+from . import confidence
+
 class _Conn:
     """单实例持久连接（线程安全读、写锁保护）。"""
     def __init__(self, path: str):
@@ -38,8 +40,12 @@ def _snapshot_key(url: str) -> str:
 
 
 def _copy_rank(row: dict) -> tuple:
-    """副本优劣：存活 > 最近存活时间 > 快照版本更新 > 路径更短。"""
+    """副本优劣：存活 > 实测置信度 > 最近存活时间 > 快照版本更新 > 路径更短。
+
+    高置信副本即使版本略旧也不该被清掉——它是真的能取到歌的那一份。
+    """
     return (1 if row.get("is_alive") else 0,
+            int(row.get("confidence") or 0),
             row.get("last_alive") or "",
             _snapshot_key(row.get("url")),
             -len(row.get("url") or ""))
@@ -63,13 +69,16 @@ def _ver_key(d: dict) -> str:
 
 
 def _group_rank(d: dict) -> tuple:
-    """同名组内主记录优劣：高置信 > 实测可用 > 存活 > 版本更新 > 最近存活 > 路径短。
+    """同名组内主记录优劣：存活 > 实测置信度 > 静态高置信 > 实测状态 > 版本 > 时间。
 
+    失效的高置信旧副本不能压过存活的低分副本；置信度只在存活组内比较。
     版本优先于最近存活时间：复检时间只取决于检测顺序，不能反映脚本新旧。
     """
-    return (d.get("valid_tier") == "confirmed",
+    alive = 1 if d.get("is_alive") else 0
+    return (alive,
+            int(d.get("confidence") or 0) * alive,
+            d.get("valid_tier") == "confirmed",
             _probe_rank(d.get("probe_status") or ""),
-            1 if d.get("is_alive") else 0,
             _ver_key(d),
             d.get("last_alive") or "",
             -len(d.get("url") or ""))
@@ -118,7 +127,9 @@ CREATE TABLE IF NOT EXISTS sources (
     probe_detail TEXT DEFAULT '',
     probe_sha TEXT DEFAULT '',
     probe_fail_streak INTEGER DEFAULT 0,
-    probe_checked TEXT DEFAULT ''
+    probe_checked TEXT DEFAULT '',
+    confidence INTEGER DEFAULT 0,
+    confidence_detail TEXT DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_sources_alive ON sources(is_alive, looks_valid);
 CREATE TABLE IF NOT EXISTS runs (
@@ -191,6 +202,8 @@ class DB:
         self._c = _Conn(path)
         self._migrate(self._c.conn)
         self._c.conn.commit()
+        # 老库升级后补算存量「实测可用」记录的置信度（幂等，只处理未评分行）
+        self.backfill_confidence()
 
     @staticmethod
     def _migrate(conn: sqlite3.Connection):
@@ -250,7 +263,9 @@ class DB:
                 ("probe_detail", "TEXT DEFAULT ''"),
                 ("probe_sha", "TEXT DEFAULT ''"),
                 ("probe_fail_streak", "INTEGER DEFAULT 0"),
-                ("probe_checked", "TEXT DEFAULT ''")):
+                ("probe_checked", "TEXT DEFAULT ''"),
+                ("confidence", "INTEGER DEFAULT 0"),
+                ("confidence_detail", "TEXT DEFAULT ''")):
             if col not in cols:
                 try:
                     conn.execute(f"ALTER TABLE sources ADD COLUMN {col} {ddl}")
@@ -301,6 +316,14 @@ class DB:
                 d["probe_detail"] = json.loads(d["probe_detail"])
             except (json.JSONDecodeError, TypeError):
                 d["probe_detail"] = {}
+        if d.get("confidence_detail"):
+            try:
+                d["confidence_detail"] = json.loads(d["confidence_detail"])
+            except (json.JSONDecodeError, TypeError):
+                d["confidence_detail"] = {}
+        else:
+            d["confidence_detail"] = {}
+        d["confidence"] = int(d.get("confidence") or 0)
         d["is_alive"] = bool(d["is_alive"])
         d["looks_valid"] = bool(d["looks_valid"])
         if not with_content:
@@ -312,7 +335,11 @@ class DB:
         if valid_only:
             sql += " WHERE looks_valid = 1"
         sql += (
-            " ORDER BY is_alive DESC, looks_valid DESC, valid_tier DESC,"
+            # 存活/有效仍是硬门槛；其后按实测置信度降序，让"多平台可用 + 音质达标"
+            # 的音源整体排到未实测/降级/失败的前面。失效行的历史分数不参与排序。
+            " ORDER BY is_alive DESC, looks_valid DESC,"
+            " CASE WHEN is_alive = 1 THEN confidence ELSE 0 END DESC,"
+            " CASE WHEN valid_tier = 'confirmed' THEN 0 ELSE 1 END,"
             " CASE probe_status WHEN 'usable' THEN 0 WHEN '' THEN 2 ELSE 1 END,"
             " last_alive DESC, first_seen DESC LIMIT ?"
         )
@@ -346,7 +373,7 @@ class DB:
             head["variants"] = [
                 {k: v.get(k) for k in ("url", "origin_repo", "origin_url", "version",
                                        "valid_tier", "is_alive", "last_alive", "mirrors",
-                                       "probe_status", "probe_checked")}
+                                       "probe_status", "probe_checked", "confidence")}
                 for _, v in g[1:]]
             skip.update(i for i, _ in g[1:])
         return [d for i, d in enumerate(merged) if i not in skip]
@@ -421,7 +448,7 @@ class DB:
         差异却各占一条，是列表噪声的主要来源。这里只收敛**同一仓库内**的同名副本；
         跨仓库的相同内容仍作为镜像保留，主链接失效时镜像仍可顶上。
         """
-        rows = self._run("""SELECT id, url, name, origin_repo, is_alive, last_alive
+        rows = self._run("""SELECT id, url, name, origin_repo, is_alive, last_alive, confidence
                             FROM sources WHERE looks_valid = 1 AND TRIM(name) != ''""")
         groups: dict = {}
         for r in rows:
@@ -446,13 +473,38 @@ class DB:
             (alive, checked_at, alive, sid))
 
     def update_probe(self, sid: int, status: str, detail: str, sha: str, checked_at: str):
-        """记录沙箱实测结果；失败连击仅对 degraded/not-loadable 累加， usable 清零。"""
+        """记录沙箱实测结果，同时写入置信度评分。
+
+        失败连击仅对 degraded/not-loadable 累加，usable 清零；非 usable 的置信度归零，
+        避免一条曾经可用、后来实测失败的音源继续顶着高分排在前面。
+        """
         fail = status in ("degraded", "not-loadable")
+        scored = confidence.score_probe(status, detail, checked_at)
         self._run(
             "UPDATE sources SET probe_status = ?, probe_detail = ?, probe_sha = ?,"
-            " probe_checked = ?, probe_fail_streak = CASE WHEN ? = 1"
+            " probe_checked = ?, confidence = ?, confidence_detail = ?,"
+            " probe_fail_streak = CASE WHEN ? = 1"
             " THEN probe_fail_streak + 1 ELSE 0 END WHERE id = ?",
-            (status, detail, sha, checked_at, 1 if fail else 0, sid))
+            (status, detail, sha, checked_at, scored["score"],
+             json.dumps(scored, ensure_ascii=False), 1 if fail else 0, sid))
+
+    def backfill_confidence(self) -> int:
+        """为升级前已存在的 usable 记录补算置信度（幂等）。
+
+        新列默认 0，但 0 分也可能是合法评分，所以以 confidence_detail 是否为空
+        判断"尚未评分"，避免每次启动反复重算。
+        """
+        rows = self._run(
+            "SELECT id, probe_detail, probe_checked FROM sources"
+            " WHERE probe_status = 'usable' AND probe_detail != ''"
+            " AND (confidence_detail = '' OR confidence_detail IS NULL)")
+        now = dt.datetime.now(dt.timezone.utc)
+        for r in rows:
+            scored = confidence.score_probe("usable", r["probe_detail"],
+                                            r["probe_checked"] or "", now=now)
+            self._run("UPDATE sources SET confidence = ?, confidence_detail = ? WHERE id = ?",
+                      (scored["score"], json.dumps(scored, ensure_ascii=False), r["id"]))
+        return len(rows)
 
     def probe_candidates(self, refresh_hours: float, limit: int) -> list:
         """待实测行：有效音源 +（未测/内容变更/超过 refresh_hours）。

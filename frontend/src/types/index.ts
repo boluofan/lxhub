@@ -78,6 +78,27 @@ export interface ProbeDetail {
   updateAlert?: { version?: string; log?: string } | null
 }
 
+/** 实测置信度评分分项（后端 confidence.py 产出，存 confidence_detail） */
+export interface ConfidenceParts {
+  base?: number
+  platforms?: number
+  coverage?: number
+  quality?: number
+  spec?: number
+  freshness?: number
+  penalty?: number
+}
+
+export interface ConfidenceDetail {
+  score?: number
+  parts?: ConfidenceParts
+  success?: number
+  tested?: number
+  quality_verdict?: string
+  spec_level?: string
+  reason?: string
+}
+
 /** 沙箱实测可用性（/api/status.probe_capability）：缺 Node 时前端禁用入口 */
 export interface ProbeCapability {
   available: boolean
@@ -142,7 +163,13 @@ export interface Source {
   http_status?: number | null
   api_hosts?: string | string[]
   mirrors?: string[]
-  variants?: { origin_repo?: string; url?: string; version?: string; is_alive?: boolean }[]
+  variants?: {
+    origin_repo?: string
+    url?: string
+    version?: string
+    is_alive?: boolean
+    confidence?: number
+  }[]
   origin_url?: string
   origin_repo?: string
   file_size?: number | null
@@ -156,6 +183,9 @@ export interface Source {
   probe_detail?: ProbeDetail | { [k: string]: unknown }
   probe_checked?: string
   probe_fail_streak?: number
+  /** 实测置信度 0–100，仅 probe_status='usable' 有非零分 */
+  confidence?: number
+  confidence_detail?: ConfidenceDetail
   content_text?: string
   _no?: number
 }
