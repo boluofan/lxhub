@@ -22,6 +22,8 @@ UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
 #   3. 全部候选失败才回退原 URL 直连一次；
 #   4. 单条前缀连续失败 FAIL_THRESHOLD 次临时摘除 QUARANTINE_SECONDS 秒，
 #      到期后放一条「半开」探测，成功即恢复、失败重新摘除。
+# 上面三个参数已做成后台可配（mirror_max_attempts / mirror_fail_threshold /
+# mirror_quarantine_seconds），由 set_mirror_policy() 热更新下面的运行时值。
 
 # 只匹配「文件下载」形态：路径拼接式镜像对 github.com 页面不支持
 _GITHUB_FILE_HOSTS = frozenset({
@@ -34,9 +36,26 @@ _MIRROR_IDX = 0
 _FAILS: dict = {}          # prefix -> 连续失败次数
 _QUARANTINE: dict = {}     # prefix -> 隔离截止（monotonic 秒）
 
-MAX_MIRROR_ATTEMPTS = 2    # 单请求最多尝试几条前缀（含轮换起点那条）
-FAIL_THRESHOLD = 3         # 连续失败多少次后临时摘除
-QUARANTINE_SECONDS = 300.0  # 摘除时长；到期后放一条半开探测
+# 默认策略。后台字段名 mirror_max_attempts / mirror_fail_threshold /
+# mirror_quarantine_seconds 与这里的键一一对应（见 apply_mirror_config）。
+MIRROR_POLICY_DEFAULTS = {
+    "max_attempts": 2,            # 单请求最多尝试几条前缀（含轮换起点那条）
+    "fail_threshold": 3,          # 连续失败多少次后临时摘除
+    "quarantine_seconds": 300.0,  # 摘除时长；到期后放一条半开探测
+}
+
+# 合法范围：后台保存与运行时热更新共用，避免手滑把重试放大或让熔断失效
+POLICY_LIMITS = {
+    "max_attempts": (1, 10),
+    "fail_threshold": (1, 100),
+    "quarantine_seconds": (0.0, 86400.0),
+}
+
+# 运行时当前值。保留大写名字以兼容既有测试与 mirror_policy() 诊断；
+# 这三个不是常量，会随后台保存 / 配置加载被 set_mirror_policy() 改写。
+MAX_MIRROR_ATTEMPTS = MIRROR_POLICY_DEFAULTS["max_attempts"]
+FAIL_THRESHOLD = MIRROR_POLICY_DEFAULTS["fail_threshold"]
+QUARANTINE_SECONDS = MIRROR_POLICY_DEFAULTS["quarantine_seconds"]
 
 # 可重试的 HTTP 状态：限流与网关类故障换下一条前缀通常能自愈
 _RETRYABLE_STATUS = frozenset({408, 425, 429, 500, 502, 503, 504})
@@ -77,6 +96,69 @@ def reset_mirror_state() -> None:
     """清空失败计数与隔离状态（测试或运维手动重置用）。"""
     _FAILS.clear()
     _QUARANTINE.clear()
+
+
+def mirror_policy() -> dict:
+    """当前生效的策略参数（诊断用）。"""
+    return {
+        "max_attempts": MAX_MIRROR_ATTEMPTS,
+        "fail_threshold": FAIL_THRESHOLD,
+        "quarantine_seconds": QUARANTINE_SECONDS,
+    }
+
+
+def _clamp_policy(key: str, value):
+    """把外部输入转成合法数值：类型不对 / NaN 回落默认，越界钳到 POLICY_LIMITS。"""
+    lo, hi = POLICY_LIMITS[key]
+    cast = float if key == "quarantine_seconds" else int
+    try:
+        v = cast(value)
+    except (TypeError, ValueError, OverflowError):
+        v = MIRROR_POLICY_DEFAULTS[key]
+    if v != v:  # NaN
+        v = MIRROR_POLICY_DEFAULTS[key]
+    return cast(min(hi, max(lo, v)))
+
+
+def set_mirror_policy(max_attempts=None, fail_threshold=None,
+                      quarantine_seconds=None) -> dict:
+    """热更新策略参数（None = 保持现值），返回更新后的 mirror_policy()。
+
+    幂等：值没变时不动任何状态，因此 run_crawl / run_check 每轮调用也不会
+    洗白坏前缀。真正发生变化时清空失败计数与隔离窗口——旧的隔离截止是按
+    旧时长算出的绝对时间戳，不重置会残留与新配置不符的隔离语义。
+    """
+    global MAX_MIRROR_ATTEMPTS, FAIL_THRESHOLD, QUARANTINE_SECONDS
+    incoming = {
+        "max_attempts": max_attempts,
+        "fail_threshold": fail_threshold,
+        "quarantine_seconds": quarantine_seconds,
+    }
+    before = mirror_policy()
+    after = {
+        k: (_clamp_policy(k, v) if v is not None else before[k])
+        for k, v in incoming.items()
+    }
+    if after != before:
+        MAX_MIRROR_ATTEMPTS = after["max_attempts"]
+        FAIL_THRESHOLD = after["fail_threshold"]
+        QUARANTINE_SECONDS = after["quarantine_seconds"]
+        reset_mirror_state()
+    return mirror_policy()
+
+
+def apply_mirror_config(cfg) -> None:
+    """从配置对象一次性应用前缀池与策略。
+
+    服务启动、后台保存、run_crawl / run_check 每轮入口共用这一个函数，
+    避免 config.json / override / 后台三个来源各自漏设。整体幂等。
+    """
+    set_mirrors(getattr(cfg, "fetch_mirrors", None))
+    set_mirror_policy(
+        max_attempts=getattr(cfg, "mirror_max_attempts", None),
+        fail_threshold=getattr(cfg, "mirror_fail_threshold", None),
+        quarantine_seconds=getattr(cfg, "mirror_quarantine_seconds", None),
+    )
 
 
 def mirror_health() -> dict:

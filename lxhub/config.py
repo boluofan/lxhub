@@ -30,6 +30,11 @@ DEFAULTS = {
     # 抓取用 GitHub 加速前缀（如 https://gh-proxy.com/，每行一个）：
     # 抓 raw/gist/codeload 与 github.com 的 archive/release 附件时按行轮换拼接；空 = 直连
     "fetch_mirrors": [],
+    # 多加速前缀容错策略（后台「配置管理 → 爬取设置」可改，见 fetcher.py 说明）：
+    # 单请求最多试几条前缀 / 连续失败几次摘除 / 摘除多少秒
+    "mirror_max_attempts": 2,
+    "mirror_fail_threshold": 3,
+    "mirror_quarantine_seconds": 300.0,
 
     # 沙箱实测探测（可选实验特性）。enabled=False 时保持纯静态模式
     "probe": {
@@ -66,6 +71,9 @@ class Config:
     crawl_interval_hours: float
     mirror_prefixes: list
     fetch_mirrors: list
+    mirror_max_attempts: int
+    mirror_fail_threshold: int
+    mirror_quarantine_seconds: float
     probe: dict
 
 
@@ -192,6 +200,9 @@ EDITABLE = {
     "crawl_interval_hours": float,
     "mirror_prefixes": list,
     "fetch_mirrors": list,
+    "mirror_max_attempts": int,
+    "mirror_fail_threshold": int,
+    "mirror_quarantine_seconds": float,
     "probe.enabled": bool,
     "probe.interval_hours": float,
     "probe.deep": bool,

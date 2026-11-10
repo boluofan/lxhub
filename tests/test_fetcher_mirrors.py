@@ -22,12 +22,15 @@ class MirrorStrategyTest(unittest.IsolatedAsyncioTestCase):
         self.orig_now = f._now
         self.clock = [1000.0]
         f._now = lambda: self.clock[0]
+        # 策略参数是模块级运行时值，逐用例复位，避免改过参数的用例污染后续断言
+        f.set_mirror_policy(**f.MIRROR_POLICY_DEFAULTS)
         f.set_mirrors([A, B, C])
         f.reset_mirror_state()
         f._MIRROR_IDX = 0
 
     def tearDown(self):
         f._now = self.orig_now
+        f.set_mirror_policy(**f.MIRROR_POLICY_DEFAULTS)
         f.set_mirrors([])
         f.reset_mirror_state()
         f._MIRROR_IDX = 0
@@ -165,6 +168,76 @@ class MirrorStrategyTest(unittest.IsolatedAsyncioTestCase):
         f.set_mirrors([A, C])
         self.assertNotIn(B, f.mirror_health())
         self.assertEqual(f.mirror_health()[A]["fails"], 0)
+
+    # ---------- 策略参数后台热更新 ----------
+
+    def test_set_mirror_policy_clamps_and_is_idempotent(self):
+        f._FAILS[A] = 2
+        got = f.set_mirror_policy(max_attempts=1)
+        self.assertEqual(got["max_attempts"], 1)
+        self.assertEqual(f.mirror_health()[A]["fails"], 0)  # 值变化 → 重置健康状态
+
+        f._FAILS[A] = 2
+        f.set_mirror_policy(max_attempts=1)  # 值没变 → 幂等，不洗白坏前缀
+        self.assertEqual(f.mirror_health()[A]["fails"], 2)
+
+        got = f.set_mirror_policy(max_attempts=999, fail_threshold=0,
+                                  quarantine_seconds=-5)
+        self.assertEqual(got["max_attempts"], 10)
+        self.assertEqual(got["fail_threshold"], 1)
+        self.assertEqual(got["quarantine_seconds"], 0.0)
+        # 非法输入（config.json 手滑写成字符串）回落默认而不是抛异常
+        self.assertEqual(f.set_mirror_policy(max_attempts="oops")["max_attempts"], 2)
+
+    async def test_max_attempts_one_disables_fallback(self):
+        f.set_mirror_policy(max_attempts=1)
+        p, calls = self.patch_fetch(lambda u: resp(502))
+        with p:
+            r = await f.fetch_limited(None, RAW, 1000)
+        self.assertEqual(calls, [A + RAW, RAW])  # 只试 1 条前缀，随后直连
+        self.assertEqual(r["status"], 502)
+
+    async def test_max_attempts_three_tries_all(self):
+        f.set_mirror_policy(max_attempts=3)
+        p, calls = self.patch_fetch(lambda u: resp(502))
+        with p:
+            await f.fetch_limited(None, RAW, 1000)
+        self.assertEqual(calls, [A + RAW, B + RAW, C + RAW, RAW])
+
+    async def test_configurable_threshold_and_quarantine(self):
+        f.set_mirror_policy(fail_threshold=1, quarantine_seconds=10)
+        p, _ = self.patch_fetch(lambda u: resp(502))
+        with p:
+            f._MIRROR_IDX = 0
+            await f.fetch_limited(None, RAW, 1000)
+        ha = f.mirror_health()
+        self.assertGreater(ha[A]["quarantine_left"], 0)
+        self.assertLessEqual(ha[A]["quarantine_left"], 10.0)  # 新隔离时长已生效
+        self.assertGreater(ha[B]["quarantine_left"], 0)       # 阈值 1，补试失败也立刻摘除
+
+    def test_apply_mirror_config_reads_cfg(self):
+        class Cfg:
+            fetch_mirrors = [A, B]
+            mirror_max_attempts = 1
+            mirror_fail_threshold = 5
+            mirror_quarantine_seconds = 60
+
+        f.apply_mirror_config(Cfg())
+        self.assertEqual(f._MIRRORS, [A, B])
+        self.assertEqual(f.mirror_policy(), {
+            "max_attempts": 1, "fail_threshold": 5, "quarantine_seconds": 60.0})
+
+    def test_apply_mirror_config_is_idempotent_for_health(self):
+        f._FAILS[A] = 2
+
+        class Cfg:
+            fetch_mirrors = [A, B, C]
+            mirror_max_attempts = 2
+            mirror_fail_threshold = 3
+            mirror_quarantine_seconds = 300.0
+
+        f.apply_mirror_config(Cfg())  # 每轮任务入口都会调，不能洗白坏前缀
+        self.assertEqual(f.mirror_health()[A]["fails"], 2)
 
 
 if __name__ == "__main__":

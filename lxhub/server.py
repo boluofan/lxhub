@@ -24,6 +24,8 @@ from .progress import Progress
 
 cfg = load_config()
 db = DB(cfg.db_path)
+# 启动即应用 config.json / override 里的加速前缀与策略，不必等第一轮任务
+fetcher.apply_mirror_config(cfg)
 # Vue 前端（frontend/dist）产物目录：默认在仓库根 frontend/dist，可用环境变量覆盖
 WEBUI_DIST = Path(
     os.environ.get("LXH_WEBUI_DIST")
@@ -536,12 +538,25 @@ async def admin_set(req: Request):
     for k, lo in _probe_mins.items():
         if k in applied and applied[k] < lo:
             raise HTTPException(400, f"字段 {k} 不能小于 {lo}")
+    # 多前缀策略参数：范围与 fetcher.POLICY_LIMITS 保持单一数据源
+    _mirror_policy_keys = {
+        "mirror_max_attempts": "max_attempts",
+        "mirror_fail_threshold": "fail_threshold",
+        "mirror_quarantine_seconds": "quarantine_seconds",
+    }
+    for field, key in _mirror_policy_keys.items():
+        if field not in applied:
+            continue
+        lo, hi = fetcher.POLICY_LIMITS[key]
+        if not (lo <= applied[field] <= hi):
+            raise HTTPException(
+                400, f"字段 {field} 应在 {lo} ~ {hi} 之间（当前 {applied[field]}）")
     for k, v in applied.items():
         _set_value(k, v)
     _save_overrides(applied)
-    if "fetch_mirrors" in applied:
-        # 加速前缀热更新：下一轮任务/新请求生效（进行中的一轮沿用旧池）
-        fetcher.set_mirrors(applied["fetch_mirrors"])
+    # 前缀池 + 策略一起热更新：下一轮任务/新请求生效（进行中的一轮沿用旧池）。
+    # apply_mirror_config 幂等，保存任意字段时调用也不会洗白坏前缀。
+    fetcher.apply_mirror_config(cfg)
     return {"ok": True, "applied": list(applied.keys())}
 
 

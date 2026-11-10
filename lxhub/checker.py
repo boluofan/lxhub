@@ -8,12 +8,12 @@ import hashlib
 import json
 
 from .discover import now
-from .fetcher import fetch_limited, new_client, probe_hosts, set_mirrors
+from .fetcher import apply_mirror_config, fetch_limited, new_client, probe_hosts
 
 async def run_check(cfg, db, log=print, progress=None):
     from .progress import NoOpProgress
     p = progress or NoOpProgress()
-    set_mirrors(getattr(cfg, "fetch_mirrors", None))  # GitHub 加速前缀热更新（见 fetcher）
+    apply_mirror_config(cfg)  # 加速前缀池 + 策略热更新（见 fetcher）
     run_id = db.new_run("check", now())
     rows = db.all_sources_rows()
     log(f"[检测] 待检测 {len(rows)} 条（含镜像）")

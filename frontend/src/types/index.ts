@@ -1,11 +1,27 @@
-export type FieldType = 'text' | 'password' | 'lines' | 'prefixes' | 'number' | 'float' | 'bool'
+export type FieldType =
+  | 'text'
+  | 'password'
+  | 'lines'
+  | 'prefixes'
+  | 'number'
+  | 'float'
+  | 'bool'
+  /** 展示容器：把若干附属字段收进一个视觉子块，自身不参与配置读写 */
+  | 'subgroup'
 
 export interface AdminField {
   key: string
   label: string
   type: FieldType
-  /** 补充说明，展示在输入框下方 */
+  /** 补充说明（tooltip） */
   tip?: string
+  /** 输入框下方的一行浅色短提示 */
+  hint?: string
+  /** 数值字段的上下界 */
+  min?: number
+  max?: number
+  /** subgroup 的附属字段；其 key 才参与配置读写 */
+  children?: AdminField[]
 }
 
 export interface AdminConfigResp {
