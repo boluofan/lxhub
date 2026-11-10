@@ -141,6 +141,67 @@ const GROUPS: Record<string, ConfigGroup> = {
       },
     ],
   },
+  export: {
+    title: '本地化输出',
+    fields: [
+      {
+        key: 'export.enabled',
+        label: '启用自动导出',
+        type: 'bool',
+        tip: '控制「定时导出」与「每轮实测后自动导出」。下方「立即导出」按钮不受此开关限制，方便先验证再开启',
+      },
+      {
+        key: 'export.top_n',
+        label: '导出前 N 名',
+        type: 'number',
+        min: 1,
+        max: 50,
+        hint: '默认 3 · 范围 1~50',
+        tip: '按实测置信度降序取前 N 名；同名变体与同内容镜像已合并，不会重复占位',
+      },
+      {
+        key: 'export.filename',
+        label: '固定文件名模板',
+        type: 'text',
+        hint: '默认 lx-source-{rank}.js · 可写 {rank:02d} 补零',
+        tip: '只允许 {rank} 占位符：文件名只由名次决定，Top 榜更换时覆盖同名文件，对外 URL 永远不变。含 {name}/{date} 等会漂移的模板会被拒绝',
+      },
+      {
+        key: 'export.min_confidence',
+        label: '最低置信度门槛',
+        type: 'number',
+        min: 0,
+        max: 100,
+        hint: '默认 1 · 只有实测 usable 才有非零分',
+        tip: '只有置信度不低于此值的实测可用音源才算「高置信」；设为 0 表示不设门槛',
+      },
+      {
+        key: 'export.interval_hours',
+        label: '定时导出间隔（小时，0 = 不定时）',
+        type: 'float',
+        min: 0,
+        hint: '默认 24 · 调度器每 15 分钟检查一次',
+      },
+      {
+        key: 'export.after_probe',
+        label: '每轮实测后自动导出',
+        type: 'bool',
+        tip: '置信度一更新就立即刷新本地文件，保证对外接口总能拿到最新最优的音源；推荐与「定时任务」里的复检周期配合',
+      },
+      {
+        key: 'export.fill_shortfall',
+        label: '不足 N 条时用次优音源补齐',
+        type: 'bool',
+        tip: '保证固定数量的文件始终存在，不会因为某轮合格音源变少而留下过期文件；补齐项会在 manifest.json 里标记 filled',
+      },
+      {
+        key: 'export.prune_stale',
+        label: '缩小 N 后清理多余旧文件',
+        type: 'bool',
+        tip: '只删除上一版 manifest.json 记录过、本次不再生成的 .js 文件，不会触碰目录里其他任何内容。默认关闭',
+      },
+    ],
+  },
 }
 
 const props = defineProps<{ groupKey: string }>()

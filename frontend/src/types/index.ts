@@ -106,6 +106,37 @@ export interface ProbeCapability {
   reason?: string | null
 }
 
+/** 本地化输出：一个固定文件名对应的音源（来自导出目录 manifest.json） */
+export interface LocalExportFile {
+  filename: string
+  rank: number
+  source_id: number
+  name: string
+  url: string
+  confidence: number
+  sha256: string
+  bytes: number
+  /** true = 高置信记录不足时由次优记录补齐 */
+  filled: boolean
+}
+
+export interface LocalExportStatus {
+  enabled: boolean
+  top_n: number
+  filename: string
+  interval_hours: number
+  after_probe: boolean
+  min_confidence: number
+  fill_shortfall: boolean
+  prune_stale: boolean
+  dir: string
+  dir_from_env: boolean
+  serve_prefix: string
+  files: LocalExportFile[]
+  generated_at: string
+  last_run: RunInfo | null
+}
+
 export interface StatusResp {
   busy: 'crawl' | 'check' | 'probe' | null
   stats: {
@@ -119,6 +150,7 @@ export interface StatusResp {
   last_crawl: RunInfo | null
   last_check: RunInfo | null
   last_probe: RunInfo | null
+  last_export?: RunInfo | null
   probe_capability?: ProbeCapability
 }
 

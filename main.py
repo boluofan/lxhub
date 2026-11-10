@@ -37,6 +37,9 @@ def main():
     p_exp = sub.add_parser("export", help="导出 JSON")
     p_exp.add_argument("--out", default="export.json")
 
+    sub.add_parser("export-local",
+                   help="按固定文件名把置信度 TopN 脚本导出到本地化目录（容器内 /app/outjs）")
+
     args = ap.parse_args()
     cfg = load_config()
     db = DB(cfg.db_path)
@@ -63,6 +66,10 @@ def main():
             cfg.probe["enabled"] = True
         asyncio.run(run_probe(cfg, db, limit=args.limit,
                               deep=True if args.deep else None))
+    elif args.cmd == "export-local":
+        from lxhub.exporter import run_export
+        result = run_export(cfg, db, trigger="cli")
+        print(json.dumps(result, ensure_ascii=False, indent=2))
     elif args.cmd == "export":
         Path(args.out).write_text(
             json.dumps(db.export(cfg.mirror_prefixes), ensure_ascii=False, indent=1),

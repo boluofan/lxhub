@@ -158,8 +158,26 @@ async def run_probe(cfg, db, log=print, progress=None, limit=None, deep=None) ->
         db.finish_run(run_id, now(), json.dumps(counters, ensure_ascii=False))
         log(f"[实测] {'已取消' if p.cancelled else '完成'}: "
             + " / ".join(f"{k} {v}" for k, v in counters.items() if k != "done"))
+        # 置信度刚更新，立刻刷新本地化文件；CLI / Web / 复检内嵌三条路径都覆盖
+        _maybe_export(cfg, db, log)
         return {"probed": counters["done"], **counters, "cancelled": p.cancelled}
     except asyncio.CancelledError:
         db.finish_run(run_id, now(), json.dumps({**counters, "cancelled": True},
                                                 ensure_ascii=False))
         raise
+
+
+def _maybe_export(cfg, db, log=print) -> None:
+    """实测后自动刷新本地化文件（export.enabled + export.after_probe 时）。
+
+    导出是纯本地 IO 且很短，失败只记日志，绝不影响实测任务本身的结果。
+    """
+    e = getattr(cfg, "export", None) or {}
+    if not e.get("enabled") or not e.get("after_probe"):
+        return
+    try:
+        from .exporter import run_export
+        r = run_export(cfg, db, trigger="after-probe", log=log)
+        log(f"[本地化] 已刷新 {r['written']} 个固定文件 → {r['dir']}")
+    except Exception as e:
+        log(f"[本地化] 实测后导出失败: {e!r}")

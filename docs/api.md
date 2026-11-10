@@ -12,6 +12,9 @@
 | `POST /api/probe` | 触发一轮沙箱实测（手动触发不受 `probe.enabled` 开关限制；未登录返回 `401`） |
 | `POST /api/cancel` | 取消当前任务（协作式停止） |
 | `GET /export.json` | 导出 |
+| `GET /api/export/local` | 本地化输出状态（配置摘要、固定文件清单、最近导出记录） |
+| `POST /api/export/local` | 立即导出一轮（受后台鉴权保护；不受 `export.enabled` 限制） |
+| `GET /local/<filename>.js` | 按固定文件名读取本地化脚本（只读，短缓存 60s） |
 
 ## 说明
 
@@ -23,3 +26,5 @@
 - 列表接口**不含**脚本文本，仅在 `/api/sources/{id}` 详情中返回前 6000 字符预览；
 - 任务进行中时，`/api/crawl` 和 `/api/check` 会返回 `409`；`/api/probe` 同样受此限制，且 busy 值可为 `probe`；
 - `/export.json` 结构与上述列表一致，供 curl / 第三方工具消费全量数据（CLI 亦可用 `main.py export` 落盘）。
+- `/api/export/local` 的 `files` 来自导出目录里的 `manifest.json`，含每个固定文件名对应的置信度与 `filled`（是否为补齐项）；`GET` 只读，`POST` 受后台鉴权保护且不受 `export.enabled` 限制。
+- `/local/<filename>.js` 对文件名做 `[A-Za-z0-9._-]+.js` 白名单并校验文件确实位于导出目录内，返回 `Cache-Control: public, max-age=60`。

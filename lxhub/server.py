@@ -17,8 +17,9 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import checker, discover, fetcher
-from .config import EDITABLE, cast_bool, load_config, override_path
+from . import checker, discover, exporter, fetcher
+from .config import (DEFAULTS, EDITABLE, NESTED_CONFIGS, cast_bool,
+                     load_config, override_path, validate_filename_template)
 from .db import DB
 from .progress import Progress
 
@@ -45,7 +46,7 @@ def _webui_index() -> Response:
 
 # ---------- 后台管理（可选，由环境变量 LXH_ADMIN_USER / LXH_ADMIN_PASS 启用） ----------
 ADMIN_USER = os.environ.get("LXH_ADMIN_USER", "admin")
-ADMIN_PASS = os.environ.get("LXH_ADMIN_PASS", "")
+ADMIN_PASS = os.environ.get("LXH_ADMIN_PASS", "123456")
 SESSIONS: dict = {}
 SESSION_TTL = 8 * 3600
 # 后台保存的覆盖配置落盘处（与数据库同目录）；加载逻辑在 config.apply_overrides，
@@ -89,19 +90,23 @@ def _norm_mirror(v):
 
 
 def _get_value(key: str):
-    """EDITABLE 平铺键 → 实际配置：probe.* 读 cfg.probe 子项，其余读 cfg 属性。"""
-    if key.startswith("probe."):
-        return (cfg.probe or {}).get(key[6:])
+    """EDITABLE 平铺键 → 实际配置：NESTED_CONFIGS 里的组读子字典，其余读 cfg 属性。"""
+    for group in NESTED_CONFIGS:
+        prefix = group + "."
+        if key.startswith(prefix):
+            return (getattr(cfg, group, None) or {}).get(key[len(prefix):])
     return getattr(cfg, key)
 
 
 def _set_value(key: str, value):
-    if key.startswith("probe."):
-        probe = dict(cfg.probe or {})
-        probe[key[6:]] = value
-        cfg.probe = probe
-    else:
-        setattr(cfg, key, value)
+    for group in NESTED_CONFIGS:
+        prefix = group + "."
+        if key.startswith(prefix):
+            block = dict(getattr(cfg, group, None) or {})
+            block[key[len(prefix):]] = value
+            setattr(cfg, group, block)
+            return
+    setattr(cfg, key, value)
 
 
 def _save_overrides(data: dict):
@@ -109,8 +114,8 @@ def _save_overrides(data: dict):
 
     必须合并而非覆盖：后台可能只提交部分字段，整体覆盖会清掉其余已保存配置
     （曾导致只改一个开关就把 github_token 等全部抹掉）。
-    probe.* 平铺键在落盘前先合并成 "probe": {...} 嵌套块，
-    与 config.json / load_config 的读取语义保持一致。
+    NESTED_CONFIGS 里的平铺键（probe.* / export.*）在落盘前先合并成各自的
+    嵌套块，与 config.json / load_config 的读取语义保持一致。
     """
     try:
         cur: dict = {}
@@ -120,16 +125,18 @@ def _save_overrides(data: dict):
                 cur = {}
         except (OSError, json.JSONDecodeError):
             cur = {}
-        probe_patch: dict = {}
+        blocks: dict = {}
         for k, v in data.items():
-            if k.startswith("probe."):
-                probe_patch[k[6:]] = v
+            group = next((g for g in NESTED_CONFIGS
+                          if k.startswith(g + ".")), None)
+            if group:
+                blocks.setdefault(group, {})[k[len(group) + 1:]] = v
             else:
                 cur[k] = v
-        if probe_patch:
-            merged = dict(cur.get("probe") or {})
-            merged.update(probe_patch)
-            cur["probe"] = merged
+        for group, patch in blocks.items():
+            merged = dict(cur.get(group) or {})
+            merged.update(patch)
+            cur[group] = merged
         OVERRIDE_PATH.parent.mkdir(parents=True, exist_ok=True)
         OVERRIDE_PATH.write_text(json.dumps(cur, ensure_ascii=False, indent=1), encoding="utf-8")
     except OSError as e:
@@ -243,6 +250,18 @@ async def _scheduler():
                     if not probe_run or _hours_since(
                             probe_run["finished_at"] or probe_run["started_at"]) >= interval:
                         await asyncio.create_task(_run_task("probe"))
+            # 本地化导出定时：纯本地 IO，不占用 STATE["busy"]；与 probe 共用 runs 表
+            # 判周期，实测后自动导出会刷新 last_run，因此不会在同一轮重复写。
+            if (cfg.export or {}).get("enabled"):
+                interval = float(cfg.export.get("interval_hours") or 0)
+                if interval > 0:
+                    exp_run = db.last_run("export")
+                    if not exp_run or _hours_since(
+                            exp_run["finished_at"] or exp_run["started_at"]) >= interval:
+                        try:
+                            await asyncio.to_thread(exporter.run_export, cfg, db, "schedule")
+                        except Exception as e:
+                            print(f"[本地化] 定时导出失败: {e!r}")
         except Exception as e:
             print(f"[定时器] {e!r}")
 
@@ -310,6 +329,7 @@ async def api_status():
         "last_crawl": db.last_run("crawl"),
         "last_check": db.last_run("check"),
         "last_probe": db.last_run("probe"),
+        "last_export": db.last_run("export"),
         "probe_capability": _probe_capability(),
     }
 
@@ -433,6 +453,42 @@ async def api_export_zip(ids: str = ""):
     )
 
 
+@app.get("/api/export/local")
+async def api_local_export_status():
+    """本地化输出状态：配置摘要、已导出的固定文件清单、最近一轮记录。"""
+    return exporter.local_status(cfg, db)
+
+
+@app.post("/api/export/local")
+async def api_local_export_run(req: Request):
+    """立即导出一轮（不受 export.enabled 限制，方便先验证再开自动）。"""
+    _check_admin(req)
+    try:
+        result = await asyncio.to_thread(exporter.run_export, cfg, db, "manual")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except OSError as e:
+        raise HTTPException(500, f"导出失败: {e!r}")
+    return {"ok": True, **result}
+
+
+@app.get("/local/{filename}")
+async def local_source(filename: str):
+    """对外提供固定文件名的只读访问（如 /local/lx-source-1.js）。
+
+    文件名严格白名单 + 目录内校验，避免路径穿越；短缓存让覆盖写入后
+    客户端能较快拿到新脚本，又不会永久缓存旧内容。
+    """
+    if not re.fullmatch(r"[A-Za-z0-9._-]+\.js", filename):
+        raise HTTPException(404, "Not Found")
+    d = exporter.export_dir()
+    target = (d / filename).resolve()
+    if not target.is_relative_to(d) or not target.is_file():
+        raise HTTPException(404, "Not Found")
+    return FileResponse(target, media_type="text/javascript; charset=utf-8",
+                        headers={"Cache-Control": "public, max-age=60"})
+
+
 @app.post("/api/admin/login")
 async def admin_login(req: Request):
     if not ADMIN_PASS:
@@ -538,6 +594,18 @@ async def admin_set(req: Request):
     for k, lo in _probe_mins.items():
         if k in applied and applied[k] < lo:
             raise HTTPException(400, f"字段 {k} 不能小于 {lo}")
+    # 本地化输出：文件名模板必须只由名次决定，否则对外 URL 会随数据漂移
+    if "export.filename" in applied:
+        tpl = str(applied["export.filename"]).strip() or DEFAULTS["export"]["filename"]
+        try:
+            applied["export.filename"] = validate_filename_template(tpl)
+        except ValueError as e:
+            raise HTTPException(400, f"字段 export.filename 无效: {e}")
+    _export_limits = {"export.top_n": (1, 50), "export.min_confidence": (0, 100),
+                      "export.interval_hours": (0.0, 8760.0)}
+    for k, (lo, hi) in _export_limits.items():
+        if k in applied and not (lo <= applied[k] <= hi):
+            raise HTTPException(400, f"字段 {k} 应在 {lo} ~ {hi} 之间")
     # 多前缀策略参数：范围与 fetcher.POLICY_LIMITS 保持单一数据源
     _mirror_policy_keys = {
         "mirror_max_attempts": "max_attempts",

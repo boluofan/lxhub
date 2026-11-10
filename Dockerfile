@@ -11,6 +11,9 @@ RUN npm run build
 FROM python:3.12-slim
 
 WORKDIR /app
+# 本地化输出目录：容器内固定为 /app/outjs，自部署时用 compose 把宿主机/NAS
+# 目录挂载到这个路径即可自定义落盘位置（见 docker-compose.yml）
+RUN mkdir -p /app/outjs
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt && \
     apt-get update && apt-get install -y --no-install-recommends curl libstdc++6 libatomic1 && \

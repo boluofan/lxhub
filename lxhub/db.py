@@ -9,9 +9,14 @@ from pathlib import Path
 from . import confidence
 
 class _Conn:
-    """单实例持久连接（线程安全读、写锁保护）。"""
+    """单实例持久连接（线程安全读、写锁保护）。
+
+    check_same_thread=False：定时导出经 asyncio.to_thread 在线程池里读写，
+    连接却在模块导入线程创建。所有访问都走 _LOCK 保护的 _run/new_run，
+    串行化已由锁保证，因此可以安全地跨线程复用这一个连接。
+    """
     def __init__(self, path: str):
-        self.conn = sqlite3.connect(path, timeout=30)
+        self.conn = sqlite3.connect(path, timeout=30, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("PRAGMA synchronous=NORMAL")

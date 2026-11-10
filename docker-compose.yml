@@ -6,6 +6,9 @@ services:
       - "8787:8787"
     volumes:
       - ./data:/app/data
+      # 本地化输出：容器内路径固定为 /app/outjs，把左边换成任意宿主机/NAS 目录
+      # 即可自定义导出位置，例如 - /vol1/docker/lxhub/outjs:/app/outjs
+      - ./outjs:/app/outjs
     environment:
       - LXH_HOST=0.0.0.0
       - LXH_PORT=8787

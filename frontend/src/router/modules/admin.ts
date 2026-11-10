@@ -1,6 +1,7 @@
 import Layout from '@/layout/index.vue'
 import {
   Cpu,
+  Download,
   Files,
   Fold,
   HomeFilled,
@@ -102,6 +103,17 @@ export default {
           meta: {
             title: '沙箱实测',
             icon: Cpu,
+            keepAlive: true,
+            auths: ['config:save'],
+          },
+        },
+        {
+          path: '/admin/config/export',
+          name: 'AdminConfigExport',
+          component: () => import('@/views/admin/config/export.vue'),
+          meta: {
+            title: '本地化输出',
+            icon: Download,
             keepAlive: true,
             auths: ['config:save'],
           },
