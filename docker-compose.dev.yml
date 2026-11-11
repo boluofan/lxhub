@@ -1,0 +1,26 @@
+# 本地开发/构建专用 compose 文件：
+#   启动/重建: docker compose -f docker-compose.dev.yml up -d --build
+#   （正式部署用 docker-compose.yml，直接拉取 ghcr.io 镜像）
+
+services:
+  lxhub:
+    # 本地改了 Python/前端代码想生效：保留 build: .，然后 docker compose up -d --build 从本地 Dockerfile 构建
+    # （此时 image: 只是给本地构建产物打的 tag，不再自动拉取远端 latest）
+    # 想恢复「直接拉原作者最新镜像」：删除下面这行 build: . 即可
+    build: .
+    image: ghcr.io/deerwan/lxhub:latest
+    container_name: lxhub
+    ports:
+      - "8787:8787"
+    volumes:
+      - ./data:/app/data
+      # 本地化输出：容器内路径固定为 /app/outjs，把左边换成任意宿主机/NAS 目录
+      # 即可自定义导出位置，例如 - /vol1/docker/lxhub/outjs:/app/outjs
+      - ./outjs:/app/outjs
+    environment:
+      - LXH_HOST=0.0.0.0
+      - LXH_PORT=8787
+      - GITHUB_TOKEN=${GITHUB_TOKEN:-}
+      - LXH_ADMIN_USER=${LXH_ADMIN_USER:-admin}
+      - LXH_ADMIN_PASS=${LXH_ADMIN_PASS:-}
+    restart: unless-stopped

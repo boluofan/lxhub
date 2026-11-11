@@ -2,7 +2,7 @@ import type { App } from 'vue'
 
 /** 兜底配置：`public/platform-config.json` 拉取失败时仍然可以启动 */
 const defaultConfig = {
-  Version: '1.4.0',
+  Version: '1.5.0',
   Title: 'LX 音源',
   FixedHeader: true,
   HiddenSideBar: false,
