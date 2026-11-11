@@ -2,6 +2,9 @@
 import { computed } from 'vue'
 import {
   baseName,
+  confidenceTag,
+  confidenceText,
+  confidenceTip,
   fmtSpec,
   parseHosts,
   PLAT,
@@ -69,6 +72,11 @@ const probedAt = computed(() => {
   const v = props.source?.probe_checked
   return typeof v === 'string' ? fmtFull(v) : ''
 })
+
+/** 置信度评分依据（tooltip 与弹层共用一份文案） */
+const confBits = computed<string[]>(() =>
+  props.source ? confidenceTip(props.source).split('\n') : [],
+)
 
 interface ProbeLine {
   key: string
@@ -144,6 +152,16 @@ const probeLines = computed<ProbeLine[]>(() => {
             <el-tag :type="PROBE_TAG[probeKey(source)]" size="small">
               {{ PROBE_TXT[probeKey(source)] }}
             </el-tag>
+            <el-tooltip
+              v-if="source?.confidence"
+              placement="top"
+              :content="confidenceTip(source)"
+              popper-class="probe-tip-popper"
+            >
+              <el-tag :type="confidenceTag(source)" size="small" effect="plain">
+                置信度 {{ confidenceText(source) }}
+              </el-tag>
+            </el-tooltip>
             <span class="muted">经 Node 沙箱真实取歌核验</span>
           </div>
           <div class="probe-res">
@@ -165,6 +183,9 @@ const probeLines = computed<ProbeLine[]>(() => {
             </div>
           </div>
           <div v-if="probedAt" class="muted probe-at">实测时间 {{ probedAt }}</div>
+          <div v-if="source?.confidence" class="conf-box">
+            <div v-for="(l, i) in confBits" :key="i" class="muted">{{ l }}</div>
+          </div>
         </template>
         <span v-else class="muted">未实测（可到后台「配置管理 → 沙箱实测」开启）</span>
       </el-descriptions-item>
@@ -239,5 +260,16 @@ const probeLines = computed<ProbeLine[]>(() => {
 .probe-at {
   margin-top: 6px;
   font-size: 12px;
+}
+.conf-box {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-left: 2px solid var(--el-border-color-lighter);
+  background: var(--el-fill-color-lighter);
+  border-radius: 2px;
+  display: grid;
+  gap: 2px;
+  font-size: 12px;
+  line-height: 1.5;
 }
 </style>

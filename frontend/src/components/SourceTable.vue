@@ -2,6 +2,9 @@
 import { downloadUrl } from '@/api/sources'
 import {
   baseName,
+  confidenceTag,
+  confidenceText,
+  confidenceTip,
   PLAT,
   PROBE_TAG,
   PROBE_TXT,
@@ -69,6 +72,16 @@ function tipBits(s: Source): string {
           <el-tooltip placement="top" :content="probeTip(row)" popper-class="probe-tip-popper">
             <el-tag :type="PROBE_TAG[probeKey(row)]" size="small" effect="plain">
               {{ PROBE_TXT[probeKey(row)] }}
+            </el-tag>
+          </el-tooltip>
+        </template>
+      </el-table-column>
+      <el-table-column prop="confidence" label="置信度" width="96" sortable="custom" align="center">
+        <template #default="{ row }">
+          <!-- 评分明细来自后端计算结果，纯文本渲染 -->
+          <el-tooltip placement="top" :content="confidenceTip(row)" popper-class="probe-tip-popper">
+            <el-tag :type="confidenceTag(row)" size="small" effect="plain">
+              {{ confidenceText(row) }}
             </el-tag>
           </el-tooltip>
         </template>

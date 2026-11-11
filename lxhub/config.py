@@ -1,6 +1,7 @@
 """配置加载：默认值 <- config.json <- 环境变量 (GITHUB_TOKEN / LXH_HOST / LXH_PORT / LXH_DB)"""
 import json
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -27,6 +28,14 @@ DEFAULTS = {
     "crawl_interval_hours": 24,
     # 复制链接时可拼接的加速前缀：[{"name":"","prefix":"https://gh1.lhl.one/","hosts":[...]}]
     "mirror_prefixes": [],
+    # 抓取用 GitHub 加速前缀（如 https://gh-proxy.com/，每行一个）：
+    # 抓 raw/gist/codeload 与 github.com 的 archive/release 附件时按行轮换拼接；空 = 直连
+    "fetch_mirrors": [],
+    # 多加速前缀容错策略（后台「配置管理 → 爬取设置」可改，见 fetcher.py 说明）：
+    # 单请求最多试几条前缀 / 连续失败几次摘除 / 摘除多少秒
+    "mirror_max_attempts": 2,
+    "mirror_fail_threshold": 3,
+    "mirror_quarantine_seconds": 300.0,
 
     # 沙箱实测探测（可选实验特性）。enabled=False 时保持纯静态模式
     "probe": {
@@ -41,7 +50,26 @@ DEFAULTS = {
         "timeout": 60,              # 单脚本总预算（秒）
         "allow_private": False,     # 允许访问内网地址（默认禁止，防 SSRF）
     },
+
+    # 本地化输出：把实测置信度 TopN 的脚本按「固定文件名」覆盖写到容器内固定目录。
+    # 目录本身不在后台配置：容器内恒为 /app/outjs，自部署时由 docker-compose
+    # 把宿主机/NAS 目录挂载到该路径来实现自定义落盘位置。
+    "export": {
+        "enabled": False,           # 定时导出 + 实测后自动导出的总开关（手动按钮不受限）
+        "top_n": 3,                 # 导出前 N 名
+        "filename": "lx-source-{rank}.js",  # 只允许 {rank} 占位符，保证文件名恒定
+        "interval_hours": 24.0,     # 定时导出周期；0 = 不定时
+        "after_probe": True,        # 每轮实测完成后立即刷新本地文件
+        "min_confidence": 1,        # 计入「高置信」的最低分（仅 usable 有非零分）
+        "fill_shortfall": True,     # 合格数不足 N 时用次优记录补齐，保证 N 个文件始终存在
+        "prune_stale": False,       # 缩小 N 后清理旧文件（只删 manifest 记录过的）
+    },
 }
+
+
+# 以「xxx.field」平铺键读写、在 override 文件里合并成嵌套块的配置组。
+# 后台保存、override 加载、/api/admin/config 三处共用，避免为新组各写一套分支。
+NESTED_CONFIGS = ("probe", "export")
 
 
 @dataclass
@@ -62,7 +90,12 @@ class Config:
     check_interval_hours: float
     crawl_interval_hours: float
     mirror_prefixes: list
+    fetch_mirrors: list
+    mirror_max_attempts: int
+    mirror_fail_threshold: int
+    mirror_quarantine_seconds: float
     probe: dict
+    export: dict
 
 
 
@@ -87,7 +120,7 @@ def _read_dotenv(path: Path) -> dict:
 
 # 允许在 .env 中设置的键（进程环境变量优先级更高，不会被 .env 覆盖）
 ENV_KEYS = ("GITHUB_TOKEN", "LXH_HOST", "LXH_PORT", "PORT", "LXH_DB",
-            "LXH_ADMIN_USER", "LXH_ADMIN_PASS")
+            "LXH_ADMIN_USER", "LXH_ADMIN_PASS", "LXH_EXPORT_DIR")
 
 
 def load_dotenv(path: Path | None = None) -> None:
@@ -124,6 +157,7 @@ def load_config(path: str | None = None) -> Config:
             data[cfg_key] = env[env_key]
     data["port"] = int(data["port"])
     data["probe"] = _norm_probe(data.get("probe"))
+    data["export"] = _norm_export(data.get("export"))
     fields = Config.__dataclass_fields__
     cfg = Config(**{k: v for k, v in data.items() if k in fields})
     apply_overrides(cfg)
@@ -169,9 +203,80 @@ def _norm_probe(raw) -> dict:
     return out
 
 
+# ---------- 本地化输出文件名模板 ----------
+# 只允许 {rank}：文件名必须只由名次决定，才能做到「Top 榜换人，对外 URL 不变」。
+# 含 {name}/{id}/{date} 的模板会随数据变化产生新文件名，旧文件残留、接口漂移，故拒绝。
+_TEMPLATE_TOKEN = re.compile(r"\{([^{}]*)\}")
+_SAFE_LITERAL = re.compile(r"^[A-Za-z0-9._-]+$")
+_RANK_SPEC = re.compile(r"0?\d*d")
+
+
+def validate_filename_template(tpl: str) -> str:
+    """校验并返回规范化模板；不合法抛 ValueError。
+
+    规则：以 .js 结尾、必须含 {rank}、占位符只能是 rank（可带 :02d 这类补零格式）、
+    字面部分只允许字母数字点下划线连字符。
+    """
+    tpl = str(tpl or "").strip()
+    if not tpl:
+        raise ValueError("不能为空")
+    if len(tpl) > 100:
+        raise ValueError("长度不能超过 100 字符")
+    if not tpl.lower().endswith(".js"):
+        raise ValueError("必须以 .js 结尾")
+    tokens = _TEMPLATE_TOKEN.findall(tpl)
+    if not tokens:
+        raise ValueError("必须包含 {rank} 占位符，否则多个名次会写成同一个文件")
+    for token in tokens:
+        name, _, spec = token.partition(":")
+        if name.strip() != "rank":
+            raise ValueError(f"只允许 {{rank}} 占位符，发现 {{{token}}}")
+        if spec and not _RANK_SPEC.fullmatch(spec.strip()):
+            raise ValueError(f"{{rank}} 的格式说明不合法：{spec}")
+    literal = _TEMPLATE_TOKEN.sub("", tpl)
+    if not literal or not _SAFE_LITERAL.fullmatch(literal):
+        raise ValueError("文件名只能包含字母、数字、点、下划线、连字符")
+    if ".." in literal:
+        raise ValueError("文件名不能包含连续的 ..")
+    return tpl
+
+
+def _norm_export(raw) -> dict:
+    """归一化 export 配置：类型校验、范围钳制、文件名模板校验。
+
+    与 _norm_probe 一样在 load_config 与 apply_overrides 末尾各跑一次，
+    保证后台保存 / 手改 override 文件都不会绕过下限。
+    """
+    out = dict(DEFAULTS["export"])
+    if isinstance(raw, dict):
+        for k, default in DEFAULTS["export"].items():
+            if k not in raw or raw[k] is None:
+                continue
+            v = raw[k]
+            try:
+                if isinstance(default, bool):
+                    out[k] = cast_bool(v)
+                elif isinstance(default, int):
+                    out[k] = int(v)
+                elif isinstance(default, float):
+                    out[k] = float(v)
+                else:
+                    out[k] = str(v).strip()
+            except (TypeError, ValueError):
+                out[k] = default
+    out["top_n"] = max(1, min(50, int(out["top_n"])))
+    out["min_confidence"] = max(0, min(100, int(out["min_confidence"])))
+    out["interval_hours"] = max(0.0, min(8760.0, float(out["interval_hours"])))
+    try:
+        out["filename"] = validate_filename_template(out["filename"])
+    except ValueError:
+        out["filename"] = DEFAULTS["export"]["filename"]
+    return out
+
+
 # ---------- 网页后台覆盖配置 ----------
-# 后台「配置管理」保存的字段清单（读写共用）。probe.* 是平铺键，
-# 落盘时合并成 override 文件里的 "probe": {...} 嵌套块。
+# 后台「配置管理」保存的字段清单（读写共用）。probe.* / export.* 是平铺键，
+# 落盘时按 NESTED_CONFIGS 合并成 override 文件里的嵌套块。
 # 注意 github_token 亦可在此填写，但会明文落盘到数据卷。
 EDITABLE = {
     "github_token": str,
@@ -187,6 +292,10 @@ EDITABLE = {
     "check_interval_hours": float,
     "crawl_interval_hours": float,
     "mirror_prefixes": list,
+    "fetch_mirrors": list,
+    "mirror_max_attempts": int,
+    "mirror_fail_threshold": int,
+    "mirror_quarantine_seconds": float,
     "probe.enabled": bool,
     "probe.interval_hours": float,
     "probe.deep": bool,
@@ -197,6 +306,14 @@ EDITABLE = {
     "probe.timeout": int,
     "probe.node": str,
     "probe.allow_private": bool,
+    "export.enabled": bool,
+    "export.top_n": int,
+    "export.filename": str,
+    "export.interval_hours": float,
+    "export.after_probe": bool,
+    "export.min_confidence": int,
+    "export.fill_shortfall": bool,
+    "export.prune_stale": bool,
 }
 
 
@@ -228,24 +345,27 @@ def apply_overrides(cfg: Config) -> None:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return
+        data = {}
     if not isinstance(data, dict):
-        return
+        data = {}
     for k, v in data.items():
-        if k == "probe" and isinstance(v, dict):
-            probe = dict(cfg.probe or {})
+        # 嵌套配置块：probe / export 共用同一套平铺键校验逻辑
+        if k in NESTED_CONFIGS and isinstance(v, dict):
+            block = dict(getattr(cfg, k, None) or {})
             for sk, sv in v.items():
-                key = f"probe.{sk}"
+                key = f"{k}.{sk}"
                 if key not in EDITABLE:
                     continue
+                cast = EDITABLE[key]
                 try:
-                    cast = EDITABLE[key]
                     if cast is bool:
                         sv = cast_bool(sv)
-                    probe[sk] = cast(sv)
+                    elif cast is list and not isinstance(sv, list):
+                        continue
+                    block[sk] = cast(sv)
                 except (ValueError, TypeError):
                     pass
-            cfg.probe = probe
+            setattr(cfg, k, block)
             continue
         if k not in EDITABLE:
             continue
@@ -253,6 +373,11 @@ def apply_overrides(cfg: Config) -> None:
             cast = EDITABLE[k]
             if cast is bool:
                 v = cast_bool(v)
+            elif cast is list and not isinstance(v, list):
+                continue
             setattr(cfg, k, cast(v))
         except (ValueError, TypeError):
             pass
+    # 无论有没有 override 都再归一化一次：手改文件也必须遵守下限与模板规则
+    cfg.probe = _norm_probe(cfg.probe)
+    cfg.export = _norm_export(cfg.export)

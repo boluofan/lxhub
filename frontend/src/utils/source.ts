@@ -123,6 +123,61 @@ function qLabel(q: string): string {
   return { matched: '达标', degraded: '降级', mismatch: '异常', refused: '拒绝核验' }[q] || q
 }
 
+/** 置信度分项标签（与后端 confidence.py 的 parts 键一一对应） */
+const CONF_LABELS: Record<string, string> = {
+  base: '实测可用基础分',
+  platforms: '成功平台数',
+  coverage: '平台覆盖率',
+  quality: '音质核验',
+  spec: '真实音频规格',
+  freshness: '实测新鲜度',
+  penalty: '更新提醒扣减',
+}
+
+const QUALITY_TIP: Record<string, string> = {
+  matched: '达标', degraded: '降级', mismatch: '异常', refused: '拒绝核验',
+  unknown: '未判定', unverified: '未核验（未开 L2 音质核验）',
+}
+
+const SPEC_TIP: Record<string, string> = {
+  high: '检出无损 / 高码率', verified: '仅核验到普通规格', none: '无规格数据',
+}
+
+/** 列表「置信度」列文本：只有实测可用且有分数时才显示数字 */
+export function confidenceText(s: Source): string {
+  return s.probe_status === 'usable' && s.confidence ? String(s.confidence) : '—'
+}
+
+export function confidenceTag(s: Source): 'success' | 'primary' | 'info' {
+  if (s.probe_status !== 'usable' || !s.confidence) return 'info'
+  if (s.confidence >= 80) return 'success'
+  if (s.confidence >= 55) return 'primary'
+  return 'info'
+}
+
+/** 置信度 tooltip：分数 + 评分依据，便于理解为什么排在前面 */
+export function confidenceTip(s: Source): string {
+  const d = s.confidence_detail
+  if (s.probe_status !== 'usable' || !s.confidence || !d?.parts) {
+    return '仅对「实测可用」的音源评分（0–100）：按成功平台数、覆盖率、音质核验结论、真实音频规格、实测新鲜度等加权；\n未实测 / 实测降级 / 实测失败均为 0 分。'
+  }
+  const bits = [`置信度 ${s.confidence} / 100 · 分数越高排序越靠前`]
+  if (typeof d.success === 'number' && typeof d.tested === 'number') {
+    bits.push(`实测成功平台 ${d.success} / ${d.tested}`)
+  }
+  if (d.quality_verdict) {
+    bits.push(`最佳平台音质：${QUALITY_TIP[d.quality_verdict] || d.quality_verdict}`)
+  }
+  if (d.spec_level) bits.push(`音频规格：${SPEC_TIP[d.spec_level] || d.spec_level}`)
+  bits.push('—— 评分构成 ——')
+  for (const [k, v] of Object.entries(d.parts as Record<string, number>)) {
+    if (typeof v !== 'number') continue
+    bits.push(`${CONF_LABELS[k] || k} ${v >= 0 ? '+' : ''}${v}`)
+  }
+  if (d.reason === 'detail-missing') bits.push('（缺少逐平台明细，仅计基础分）')
+  return bits.join('\n')
+}
+
 export function parseHosts(s: { api_hosts?: string | string[] }): string[] {
   const h = s?.api_hosts
   if (Array.isArray(h)) return h

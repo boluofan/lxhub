@@ -17,6 +17,8 @@ data/
 *.db
 *.db-wal
 *.db-shm
+# 本地化输出（compose 默认挂载到 ./outjs，内容是自动生成的可再生脚本）
+outjs/
 
 # ---------- 本地导出 ----------
 # 手动导出请写到其他路径，例如：python main.py export --out /tmp/export.json
@@ -33,6 +35,9 @@ Thumbs.db
 .idea/
 .vscode/
 .codebuddy/
+
+# ---------- 智能体内部记忆（非项目代码） ----------
+.workbuddy/
 
 # ---------- 环境变量 ----------
 .env

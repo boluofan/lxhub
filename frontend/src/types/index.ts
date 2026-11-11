@@ -1,11 +1,27 @@
-export type FieldType = 'text' | 'password' | 'lines' | 'prefixes' | 'number' | 'float' | 'bool'
+export type FieldType =
+  | 'text'
+  | 'password'
+  | 'lines'
+  | 'prefixes'
+  | 'number'
+  | 'float'
+  | 'bool'
+  /** 展示容器：把若干附属字段收进一个视觉子块，自身不参与配置读写 */
+  | 'subgroup'
 
 export interface AdminField {
   key: string
   label: string
   type: FieldType
-  /** 补充说明，展示在输入框下方 */
+  /** 补充说明（tooltip） */
   tip?: string
+  /** 输入框下方的一行浅色短提示 */
+  hint?: string
+  /** 数值字段的上下界 */
+  min?: number
+  max?: number
+  /** subgroup 的附属字段；其 key 才参与配置读写 */
+  children?: AdminField[]
 }
 
 export interface AdminConfigResp {
@@ -62,11 +78,63 @@ export interface ProbeDetail {
   updateAlert?: { version?: string; log?: string } | null
 }
 
+/** 实测置信度评分分项（后端 confidence.py 产出，存 confidence_detail） */
+export interface ConfidenceParts {
+  base?: number
+  platforms?: number
+  coverage?: number
+  quality?: number
+  spec?: number
+  freshness?: number
+  penalty?: number
+}
+
+export interface ConfidenceDetail {
+  score?: number
+  parts?: ConfidenceParts
+  success?: number
+  tested?: number
+  quality_verdict?: string
+  spec_level?: string
+  reason?: string
+}
+
 /** 沙箱实测可用性（/api/status.probe_capability）：缺 Node 时前端禁用入口 */
 export interface ProbeCapability {
   available: boolean
   node?: string
   reason?: string | null
+}
+
+/** 本地化输出：一个固定文件名对应的音源（来自导出目录 manifest.json） */
+export interface LocalExportFile {
+  filename: string
+  rank: number
+  source_id: number
+  name: string
+  url: string
+  confidence: number
+  sha256: string
+  bytes: number
+  /** true = 高置信记录不足时由次优记录补齐 */
+  filled: boolean
+}
+
+export interface LocalExportStatus {
+  enabled: boolean
+  top_n: number
+  filename: string
+  interval_hours: number
+  after_probe: boolean
+  min_confidence: number
+  fill_shortfall: boolean
+  prune_stale: boolean
+  dir: string
+  dir_from_env: boolean
+  serve_prefix: string
+  files: LocalExportFile[]
+  generated_at: string
+  last_run: RunInfo | null
 }
 
 export interface StatusResp {
@@ -82,6 +150,7 @@ export interface StatusResp {
   last_crawl: RunInfo | null
   last_check: RunInfo | null
   last_probe: RunInfo | null
+  last_export?: RunInfo | null
   probe_capability?: ProbeCapability
 }
 
@@ -126,7 +195,13 @@ export interface Source {
   http_status?: number | null
   api_hosts?: string | string[]
   mirrors?: string[]
-  variants?: { origin_repo?: string; url?: string; version?: string; is_alive?: boolean }[]
+  variants?: {
+    origin_repo?: string
+    url?: string
+    version?: string
+    is_alive?: boolean
+    confidence?: number
+  }[]
   origin_url?: string
   origin_repo?: string
   file_size?: number | null
@@ -140,6 +215,9 @@ export interface Source {
   probe_detail?: ProbeDetail | { [k: string]: unknown }
   probe_checked?: string
   probe_fail_streak?: number
+  /** 实测置信度 0–100，仅 probe_status='usable' 有非零分 */
+  confidence?: number
+  confidence_detail?: ConfidenceDetail
   content_text?: string
   _no?: number
 }

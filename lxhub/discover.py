@@ -22,7 +22,7 @@ import re
 import time
 from urllib.parse import quote, unquote, urlparse, parse_qs
 
-from .fetcher import decode_bytes, fetch_limited, new_client, probe_hosts
+from .fetcher import apply_mirror_config, decode_bytes, fetch_limited, new_client, probe_hosts
 from .metadata import (classify_script, detect_platforms, extract_api_hosts,
                        parse_annotations, valid_tier)
 
@@ -632,6 +632,7 @@ async def backfill_repo_dates(client, cfg, db, repos: dict, log=print, progress=
 async def run_crawl(cfg, db, log=print, progress=None):
     from .progress import NoOpProgress
     p = progress or NoOpProgress()
+    apply_mirror_config(cfg)  # 加速前缀池 + 策略热更新（见 fetcher）
     run_id = db.new_run("crawl", now())
     log("[爬取] 开始")
     client = new_client(cfg.request_timeout)
@@ -697,7 +698,8 @@ async def run_crawl(cfg, db, log=print, progress=None):
                     tag = "失效"
                 else:
                     tag = "普通js"
-                log(f"  [{tag}] {url}")
+                suffix = f"(HTTP {d['http_status']})" if tag == "失效" else ""
+                log(f"  [{tag}{suffix}] {url}")
 
         tasks = []
         repos_done = 0

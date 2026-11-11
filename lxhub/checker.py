@@ -8,11 +8,12 @@ import hashlib
 import json
 
 from .discover import now
-from .fetcher import fetch_limited, new_client, probe_hosts
+from .fetcher import apply_mirror_config, fetch_limited, new_client, probe_hosts
 
 async def run_check(cfg, db, log=print, progress=None):
     from .progress import NoOpProgress
     p = progress or NoOpProgress()
+    apply_mirror_config(cfg)  # 加速前缀池 + 策略热更新（见 fetcher）
     run_id = db.new_run("check", now())
     rows = db.all_sources_rows()
     log(f"[检测] 待检测 {len(rows)} 条（含镜像）")
@@ -61,7 +62,13 @@ async def run_check(cfg, db, log=print, progress=None):
                 if alive_api is not None:
                     db.update_api_probe(row["id"], "up" if alive_api else "down", now())
                     p.log(f"  [后端{'活' if alive_api else '挂'}] {row['name'] or row['url']}")
-            log(f"  [{'存活' if ok else '失效'}] {row['url']}")
+            if ok:
+                mark = "存活"
+            else:
+                # 失效时带原因：HTTP 0 = 网络不通（镜像/直连都失败），404 = 文件已删，429 = 被限流
+                why = f"HTTP {r['status']}" + (f"，{r['error']}" if r["error"] else "")
+                mark = f"失效({why})"
+            log(f"  [{mark}] {row['url']}")
 
     try:
         await asyncio.gather(*(one(r) for r in rows))
