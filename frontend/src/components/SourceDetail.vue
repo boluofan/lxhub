@@ -47,6 +47,12 @@ const apiText = computed(() => {
   const s = props.source
   if (!s) return '—'
   const hosts = parseHosts(s)
+  // 沙箱实测为真相源：实测可用/降级时，即使后端 ping 判「挂」也以实测为准
+  if (s.probe_status === 'usable' || s.probe_status === 'degraded') {
+    return s.api_alive === 'down'
+      ? '疑似挂 · 但沙箱实测可用（以实测为准）'
+      : `活 · ${hosts.length} 个域名可访问`
+  }
   if (s.api_alive === 'up') return `活 · ${hosts.length} 个域名可访问`
   if (s.api_alive === 'down') return '挂 · 声明的后端域名均不可达'
   return hosts.length ? '未探测' : '脚本未声明后端域名'

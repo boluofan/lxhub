@@ -174,6 +174,7 @@ export interface ProgressSnapshot {
   kind: 'crawl' | 'check' | 'probe' | null
   cancelled?: boolean
   message?: string
+  skipped_reason?: string | null
   elapsed?: number
   stats?: ProgressStats
   logs?: string[]

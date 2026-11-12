@@ -78,22 +78,32 @@ async def _node_version_ok(node: str) -> tuple[bool, str]:
         return False, ""
 
 
-async def run_probe(cfg, db, log=print, progress=None, limit=None, deep=None) -> dict:
+async def run_probe(cfg, db, log=print, progress=None, limit=None, deep=None,
+                    force: bool = False) -> dict:
     p = progress or NoOpProgress()
-    if not cfg.probe.get("enabled"):
-        log("[实测] 未启用：后台「配置管理 → 沙箱实测」打开开关，或 CLI 加 --yes")
-        return {"skipped": True}
+    if not cfg.probe.get("enabled") and not force:
+        reason = "未启用沙箱实测：后台「配置管理 → 沙箱实测」打开开关（手动点按钮或 CLI --yes 不受此限）"
+        log(f"[实测] {reason}")
+        if p is not NoOpProgress:
+            p.skipped_reason = reason
+        return {"skipped": True, "reason": "disabled"}
     # Docker 等运行环境可能没有 Node：此时整轮跳过、不落库。
     # 若强行逐条探测会全部 not-loadable，失败连击会导致 prune 误删真实可用音源
     node_bin = str(cfg.probe.get("node") or "node")
     if not shutil.which(node_bin):
-        log(f"[实测] 跳过：找不到 Node 可执行文件（{cfg.probe.get('node')!r}）"
-            "——容器部署需在镜像内安装 Node ≥20，或关闭沙箱实测")
-        return {"skipped": True}
+        reason = (f"找不到 Node 可执行文件（{cfg.probe.get('node')!r}）"
+                  "——容器部署需在镜像内安装 Node ≥20，或关闭沙箱实测")
+        log(f"[实测] 跳过：{reason}")
+        if p is not NoOpProgress:
+            p.skipped_reason = reason
+        return {"skipped": True, "reason": "node-not-found"}
     ver_ok, ver = await _node_version_ok(node_bin)
     if not ver_ok:
-        log(f"[实测] 跳过：Node 版本不满足要求（检测到 {ver or '未知版本'}），需要 ≥20")
-        return {"skipped": True}
+        reason = f"Node 版本不满足要求（检测到 {ver or '未知版本'}），需要 ≥20"
+        log(f"[实测] 跳过：{reason}")
+        if p is not NoOpProgress:
+            p.skipped_reason = reason
+        return {"skipped": True, "reason": "node-version"}
     limit = int(limit) if limit else int(cfg.probe["max_per_run"])
     if deep is None:
         deep = bool(cfg.probe["deep"])
@@ -145,7 +155,11 @@ async def run_probe(cfg, db, log=print, progress=None, limit=None, deep=None) ->
             counters[key] += 1
             db.update_probe(row["id"], status, json.dumps(r, ensure_ascii=False),
                             row.get("sha256") or "", now())
-            p.update(urls_done=counters["done"])
+            # 实时把可用/降级/失败计数推给前端进度，避免汇总消息永远显示「—」
+            p.update(urls_done=counters["done"],
+                     usable=counters["usable"],
+                     degraded=counters["degraded"],
+                     not_loadable=counters["not_loadable"])
             extra = ""
             if r.get("updateAlert"):
                 extra = f" | 更新提醒: {r['updateAlert'].get('log', '')[:60]}"

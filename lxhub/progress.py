@@ -16,6 +16,7 @@ class Progress:
         self.started_at = time.time()
         self.finished_at: float | None = None
         self.cancelled = False
+        self.skipped_reason: str | None = None
 
     def set_phase(self, phase: str, message: str = ""):
         self.phase = phase
@@ -39,6 +40,7 @@ class Progress:
             "started_at": self.started_at,
             "elapsed": round((self.finished_at or time.time()) - self.started_at, 1),
             "cancelled": self.cancelled,
+            "skipped_reason": self.skipped_reason,
         }
 
 

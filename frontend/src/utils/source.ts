@@ -36,8 +36,13 @@ export function statusKey(s: {
   is_alive?: boolean
   api_alive?: string
   script_type?: string
+  probe_status?: string
 }): StatusKey {
   if (!s.is_alive) return 'dead'
+  // 沙箱实测为真相源：实测可用 / 降级说明脚本确实能取回真实音频，
+  // 此时即使后端 ping（api_alive）判为「挂」也只是扒错的域名/出口差异，
+  // 以实测结果为准，避免误标「后端挂」。
+  if (s.probe_status === 'usable' || s.probe_status === 'degraded') return 'ok'
   if (s.api_alive === 'down') return 'down'
   if (s.script_type === 'companion') return 'comp'
   if (s.script_type === 'unknown') return 'unk'

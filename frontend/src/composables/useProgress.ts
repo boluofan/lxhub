@@ -37,11 +37,11 @@ export function useProgress(onDone: () => void) {
         ? '已取消'
         : '已完成'
       : p.kind === 'crawl'
-        ? '正在爬取'
-        : p.kind === 'probe'
-          ? '正在沙箱实测'
-          : '正在检测'
-    view.msg = p.message || ''
+      ? '正在爬取'
+      : p.kind === 'probe'
+        ? '正在沙箱实测'
+        : '正在检测'
+    view.msg = (p.skipped_reason && p.kind === 'probe' ? p.skipped_reason : p.message) || ''
     view.elapsed = `已用时 ${fmtElapsed(p.elapsed || 0)}`
     const total = s.urls_total || 0
     const doneCount = s.urls_done || 0
@@ -84,6 +84,10 @@ export function useProgress(onDone: () => void) {
       render(p, true)
       onDone()
       const s = p.stats || {}
+      if (p.skipped_reason && p.kind === 'probe') {
+        message(`未触发实测：${p.skipped_reason}`, { type: 'warning' })
+        return
+      }
       message(
         p.cancelled
           ? '任务已取消'

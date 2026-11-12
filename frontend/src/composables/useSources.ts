@@ -11,6 +11,16 @@ export interface SortState {
 
 const SORT_KEY = 'lxh.sort'
 
+// 沙箱实测为真相源：实测可用/降级时，后端 ping 判「挂」不降权；
+// 仅当未实测或实测失败时，ping 挂才作为排序的反向权重。
+function pingBlocked(s: Source): boolean {
+  return (
+    s.api_alive === 'down' &&
+    s.probe_status !== 'usable' &&
+    s.probe_status !== 'degraded'
+  )
+}
+
 function loadSort(): SortState {
   try {
     const s = JSON.parse(localStorage.getItem(SORT_KEY) || 'null')
@@ -61,7 +71,7 @@ export function useSources() {
       // 实测置信度高的整体靠前，再比静态分级 / 实测状态 / 更新时间。
       return [...list].sort(
         (a, b) =>
-          Number(a.api_alive === 'down') - Number(b.api_alive === 'down') ||
+          Number(pingBlocked(a)) - Number(pingBlocked(b)) ||
           Number(!!b.is_alive) - Number(!!a.is_alive) ||
           Number(!!b.looks_valid) - Number(!!a.looks_valid) ||
           Number(b.confidence || 0) - Number(a.confidence || 0) ||
@@ -77,7 +87,7 @@ export function useSources() {
       let c = 0
       if (k === 'ver') c = String(x).localeCompare(String(y), undefined, { numeric: true })
       else if (k !== 'no') c = x < y ? -1 : x > y ? 1 : 0
-      if (c === 0) c = Number(a.api_alive === 'down') - Number(b.api_alive === 'down')
+      if (c === 0) c = Number(pingBlocked(a)) - Number(pingBlocked(b))
       return dir * c
     })
   }

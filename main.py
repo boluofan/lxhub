@@ -62,10 +62,9 @@ def main():
         asyncio.run(run_check(cfg, db))
     elif args.cmd == "probe":
         from lxhub.probe import run_probe
-        if args.yes:
-            cfg.probe["enabled"] = True
         asyncio.run(run_probe(cfg, db, limit=args.limit,
-                              deep=True if args.deep else None))
+                              deep=True if args.deep else None,
+                              force=args.yes))
     elif args.cmd == "export-local":
         from lxhub.exporter import run_export
         result = run_export(cfg, db, trigger="cli")

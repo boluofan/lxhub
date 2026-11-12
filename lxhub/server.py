@@ -187,7 +187,7 @@ def _hours_since(iso: str) -> float:
     return (dt.datetime.now(dt.timezone.utc) - t).total_seconds() / 3600
 
 
-async def _run_task(kind: str):
+async def _run_task(kind: str, force: bool = False):
     global PROGRESS
     if STATE["busy"]:
         return
@@ -206,7 +206,7 @@ async def _run_task(kind: str):
             await discover.run_crawl(cfg, db, log=_log, progress=PROGRESS)
         elif kind == "probe":
             from .probe import run_probe
-            await run_probe(cfg, db, log=_log, progress=PROGRESS)
+            await run_probe(cfg, db, log=_log, progress=PROGRESS, force=force)
         else:
             await checker.run_check(cfg, db, log=_log, progress=PROGRESS)
     except asyncio.CancelledError:
@@ -387,7 +387,9 @@ async def api_probe(req: Request):
     _check_admin(req)
     if STATE["busy"]:
         raise HTTPException(409, f"任务进行中: {STATE['busy']}")
-    asyncio.create_task(_run_task("probe"))
+    # 手动触发绕过 probe.enabled：开关只控制定时任务 + 复检后自动补测，
+    # 后台点按钮即视为明确意图（与 api_probe 文档、CLI --yes 一致）
+    asyncio.create_task(_run_task("probe", force=True))
     return {"started": True}
 
 
